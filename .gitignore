@@ -1,5 +1,4 @@
 docs/claude-relay-service/
-.codex
 
 # ===================
 # Go 后端
@@ -119,14 +118,12 @@ tests
 !deploy/tests/
 !deploy/tests/**
 CLAUDE.md
-.claude
 scripts
 !backend/scripts/
 !backend/scripts/resolve-version.sh
 .code-review-state
 #openspec/
 code-reviews/
-AGENTS.md
 backend/cmd/server/server
 deploy/docker-compose.override.yml
 .gocache/
@@ -139,7 +136,6 @@ docs/*
 !docs/legal/
 !docs/legal/*.md
 .serena/
-.codex/
 frontend/coverage/
 aicodex
 output/
