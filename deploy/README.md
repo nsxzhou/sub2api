@@ -243,10 +243,66 @@ docker compose down -v
 | `GEMINI_OAUTH_CLIENT_SECRET` | No | *(builtin)* | Google OAuth client secret (Gemini OAuth). Leave empty to use the built-in Gemini CLI client. |
 | `GEMINI_OAUTH_SCOPES` | No | *(default)* | OAuth scopes (Gemini OAuth) |
 | `GEMINI_QUOTA_POLICY` | No | *(empty)* | JSON overrides for Gemini local quota simulation (Code Assist only). |
+| `SECURITY_URL_ALLOWLIST_ENABLED` | No | `false` | Enable URL allowlist validation (SSRF protection). Disabled by default — enable explicitly for production. 启用 URL 白名单校验（SSRF 防护）；默认关闭，生产环境按需显式开启 |
+| `SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS` | No | *(built-in list)* | Comma-separated allowed upstream hosts (e.g. `api.openai.com,api.anthropic.com`); hosts outside the list are rejected once the allowlist is enabled. A non-empty value replaces the built-in default list (see `config.example.yaml`). 逗号分隔的允许上游主机列表（启用后白名单外的 host 会被拒绝）；非空设置会替换内置默认列表（见 config.example.yaml） |
+| `SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS` | No | `true` | Allow localhost/private IPs for upstream/pricing/CRS. Set `false` to also verify resolved IPs against private ranges (SSRF hardening). 是否允许本地/私有 IP 用于上游/定价/CRS；设为 false 时额外校验解析后 IP 防 SSRF |
+| `SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP` | No | `true` | Allow `http://` URLs when the allowlist is disabled (set `false` to require https). 白名单禁用时是否允许 http:// URL（设为 false 则仅允许 https） |
 
 See `.env.example` for all available options.
 
 > **Note:** The `docker-deploy.sh` script automatically generates `JWT_SECRET`, `TOTP_ENCRYPTION_KEY`, and `POSTGRES_PASSWORD` for you.
+
+### Production Security Configuration (生产安全配置)
+
+On startup, the backend may print three security warnings. They come from two root causes — an unset `TOTP_ENCRYPTION_KEY` and a disabled URL allowlist:
+后端启动时可能打印三条安全警告，根因是以下两个配置项未设置：
+
+| Startup warning 启动警告 | Root cause 根因 | How to fix 修复方式 |
+|---|---|---|
+| `TOTP encryption key auto-generated` | `TOTP_ENCRYPTION_KEY` not set | Set a fixed `TOTP_ENCRYPTION_KEY` (see below) |
+| `payment encryption/signing key is not explicitly configured` | `TOTP_ENCRYPTION_KEY` not set | Set a fixed `TOTP_ENCRYPTION_KEY` (payment resume tokens are then enabled) |
+| `security.url_allowlist.enabled=false` | URL allowlist not enabled | Set `SECURITY_URL_ALLOWLIST_ENABLED=true` (or `security.url_allowlist.enabled: true` in config.yaml) |
+
+#### TOTP_ENCRYPTION_KEY (TOTP / 支付加密密钥)
+
+Generate a fixed key **before the first deployment**:
+首次部署前生成固定 key：
+
+```bash
+openssl rand -hex 32    # 64 hex chars, 256 bits (AES-256) / 64 位十六进制
+```
+
+Configuration locations 配置位置：
+- `.env`: add `TOTP_ENCRYPTION_KEY=<key>` and start with Docker Compose (the variable is passed through to the container). 在 `.env` 中配置后由 docker-compose 透传。
+- `docker-deploy.sh` generates one automatically (see the note above). 部署脚本会自动生成。
+- Binary install: set the `Environment=TOTP_ENCRYPTION_KEY=` line in the systemd unit, or `totp.encryption_key` in `/etc/sub2api/config.yaml`. 二进制安装可在 systemd unit 中设置环境变量，或通过 config.yaml 的 `totp.encryption_key` 配置。
+
+If left unset, the backend auto-generates a random key at every startup and prints the two warnings above. A randomly rotated key breaks everything encrypted with it:
+未设置时后端每次启动都会随机生成 key（随机 key 重启即变），导致所有依赖该 key 的加密数据失效：
+
+- **TOTP 2FA** secrets become invalid after every restart (users must re-enable 2FA). TOTP 双因素认证重启后失效（需重新绑定）。
+- **prompt_guard audit node tokens** become invalid after every restart. prompt_guard 审计节点 token 重启后失效。
+- **Payment resume tokens** are disabled (payment continuation unavailable). 支付 resume tokens 被禁用（无法续期支付）。
+- **S3 secret access keys** cannot be stored persistently. S3 secret access key 无法持久存储。
+- **Ollama cloud sessions** cannot be stored. Ollama cloud session 无法存储。
+
+> Set a fixed key before the first deployment. If data was already encrypted with an auto-generated key, switching to a fixed key later will make the old ciphertext undecryptable. 务必在首次部署前设置固定 key；若已有数据被随机 key 加密，之后再换固定 key 会导致旧密文无法解密。
+
+#### URL Allowlist (URL 白名单 / SSRF 防护)
+
+When `SECURITY_URL_ALLOWLIST_ENABLED=true`, every proxied request host must match the allowlist — hosts outside the list are rejected. Make sure `SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS` contains **all** the upstreams you want to allow (comma-separated, e.g. `api.openai.com,api.anthropic.com`) before enabling it — a non-empty value replaces the built-in default host list entirely (see `config.example.yaml`):
+`SECURITY_URL_ALLOWLIST_ENABLED=true` 后，代理请求的 host 必须匹配白名单，白名单外的 host 会被拒绝；启用前务必确认 `UPSTREAM_HOSTS` 包含所有需要放行的上游——非空设置会整体替换内置默认主机列表（见 config.example.yaml）。
+
+- `SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=false` additionally verifies that the resolved IP is not in private ranges (SSRF hardening). 设为 false 时额外校验解析后 IP 是否属于私有网段，防 SSRF。
+- `SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=false` requires https:// URLs. 设为 false 时仅允许 https://。
+- `pricing_hosts` and `crs_hosts` have **no** environment variable passthrough — they must be configured via `security.url_allowlist.*` in config.yaml. `pricing_hosts` / `crs_hosts` 无环境变量透传，只能通过 config.yaml 的 `security.url_allowlist.*` 配置（完整示例见 `deploy/config.example.yaml` 136-165 行）。
+
+The allowlist is **intentionally disabled by default**; enabling it is an explicit choice by the deployer, so existing custom upstreams keep working until you opt in. 白名单默认禁用是有意的渐进默认，启用是部署方的显式选择，避免破坏现有自定义上游。
+
+#### Local Development vs Production (本地开发 vs 生产场景)
+
+- **Local development (`make dev`)**: no fixed key and no allowlist are configured by default, so the warnings are **harmless and can be ignored** — the random key only affects decrypting encrypted data after a restart, and dev has no persistent sensitive data. 本地开发（`make dev`）无固定 key / 未启用白名单，三条警告无害，可忽略。
+- **Production**: always set a fixed `TOTP_ENCRYPTION_KEY`; enabling the URL allowlist is recommended. 生产部署必须配置固定 key；建议启用 URL 白名单。
 
 ### Easy Migration (Local Directory Version)
 
