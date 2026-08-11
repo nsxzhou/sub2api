@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical dev dev-backend dev-frontend dev-deps dev-deps-down dev-config dev-check
+.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical dev dev-backend dev-frontend dev-logs dev-deps dev-deps-down dev-config dev-check
 
 FRONTEND_CRITICAL_VITEST := \
 	src/api/__tests__/client.spec.ts \
@@ -50,23 +50,38 @@ test-frontend-critical:
 #   make dev           # 一键启动后端(:8080) + 前端(:3000)，Ctrl+C 一起停止
 #   make dev-backend   # 只启动后端
 #   make dev-frontend  # 只启动前端
+#   make dev-logs      # 实时查看前后端日志（tail -f logs/*.log）
 # =============================================================================
 
-# 一键启动前后端（Ctrl+C 同时退出）
+# 日志目录（前后端日志分文件保存，避免终端混在一起）
+LOG_DIR := logs
+
+# 一键启动前后端（Ctrl+C 同时退出，日志分文件写入 logs/）
 dev: dev-check
+	@mkdir -p $(LOG_DIR)
 	@echo "==> 启动后端 http://localhost:8080 与前端 http://localhost:3000 （Ctrl+C 停止）"
+	@echo "==> 日志: $(LOG_DIR)/backend.log | $(LOG_DIR)/frontend.log（实时查看: make dev-logs）"
 	@trap 'kill $$(jobs -p) 2>/dev/null' INT TERM EXIT; \
-	cd backend && go run ./cmd/server/ & \
-	cd frontend && pnpm dev & \
+	cd backend && go run ./cmd/server/ >../$(LOG_DIR)/backend.log 2>&1 & \
+	cd frontend && NO_COLOR=1 pnpm dev >../$(LOG_DIR)/frontend.log 2>&1 & \
 	wait
 
-# 只启动后端
+# 只启动后端（日志写入 logs/backend.log）
 dev-backend:
-	@cd backend && go run ./cmd/server/
+	@mkdir -p $(LOG_DIR)
+	@echo "==> 启动后端 http://localhost:8080 （Ctrl+C 停止），日志: $(LOG_DIR)/backend.log"
+	@cd backend && go run ./cmd/server/ >../$(LOG_DIR)/backend.log 2>&1
 
-# 只启动前端
+# 只启动前端（日志写入 logs/frontend.log）
 dev-frontend:
-	@cd frontend && pnpm dev
+	@mkdir -p $(LOG_DIR)
+	@echo "==> 启动前端 http://localhost:3000 （Ctrl+C 停止），日志: $(LOG_DIR)/frontend.log"
+	@cd frontend && NO_COLOR=1 pnpm dev >../$(LOG_DIR)/frontend.log 2>&1
+
+# 实时查看前后端日志（Ctrl+C 退出）
+dev-logs:
+	@mkdir -p $(LOG_DIR)
+	@tail -F $(LOG_DIR)/backend.log $(LOG_DIR)/frontend.log
 
 # 启动本地依赖容器（PostgreSQL + Redis，数据持久化在 Docker 卷）
 dev-deps:
@@ -80,7 +95,7 @@ dev-deps-down:
 dev-config:
 	@if [ ! -f backend/config.yaml ]; then \
 		cp deploy/config.example.yaml backend/config.yaml && \
-		sed -i.bak -e 's/^  host: "localhost"$$/  host: "127.0.0.1"/' -e 's/^  port: 5432$$/  port: 15432/' -e 's/^  port: 6379$$/  port: 16379/' backend/config.yaml && \
+		sed -i.bak -e 's/^  host: "localhost"$$/  host: "127.0.0.1"/' -e 's/^  port: 5432$$/  port: 15432/' -e 's/^  port: 6379$$/  port: 16379/' -e 's/^  user: "postgres"$$/  user: "sub2api"/' -e 's/^  password: "your_secure_password_here"$$/  password: "sub2api"/' -e 's/^  sslmode: "prefer"$$/  sslmode: "disable"/' -e 's/^    to_file: true$$/    to_file: false/' backend/config.yaml && \
 		rm -f backend/config.yaml.bak && \
 		echo "==> 已生成 backend/config.yaml（PG: 15432, Redis: 16379）"; \
 	else \
