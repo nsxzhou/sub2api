@@ -53,3 +53,12 @@ Quality is enforced by unit/integration tests, `golangci-lint` (v2.7), Go format
 - Forgetting integration test tags → CI fails on integration tests.
 - Adding a new dependency without updating `go.mod`/`go.sum` (commit both).
 - Over-logging in hot paths or under-logging in error paths.
+- Assuming an empty environment variable overrides a viper default. This project does **not** call
+  `viper.AllowEmptyEnv(true)`, so an empty env value (e.g. `SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=${SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS:-}`
+  in docker-compose) is treated as **unset**, and the built-in `viper.SetDefault` value wins
+  (`backend/internal/config/config.go:1951-1969`). Before documenting env-var behavior, verify what
+  the actual effective default is — the built-in default upstream host list stays active until a
+  non-empty value is set.
+- Documenting startup-warning → root-cause mappings without checking every consumer of the same
+  config key. `TOTP_ENCRYPTION_KEY` is shared by TOTP 2FA, payment resume tokens, prompt_guard
+  audit tokens, S3 secret storage, and Ollama cloud sessions — one unset key disables all of them.
