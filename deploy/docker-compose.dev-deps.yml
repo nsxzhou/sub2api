@@ -1,0 +1,50 @@
+# =============================================================================
+# Sub2API 本地开发依赖（仅 PostgreSQL + Redis）
+# =============================================================================
+# 用途：宿主机跑 Go 后端（go run ./cmd/server）+ pnpm dev 前端时，
+#       数据库与缓存跑在 Docker 容器里，端口暴露到宿主机。
+#
+# 启动：  docker compose -f deploy/docker-compose.dev-deps.yml up -d
+# 停止：  docker compose -f deploy/docker-compose.dev-deps.yml down
+# 清数据：docker compose -f deploy/docker-compose.dev-deps.yml down -v
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: sub2api-dev-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:15432:5432"
+    environment:
+      - POSTGRES_USER=sub2api
+      - POSTGRES_PASSWORD=sub2api
+      - POSTGRES_DB=sub2api
+      - TZ=Asia/Shanghai
+    volumes:
+      - dev-deps-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sub2api -d sub2api"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: sub2api-dev-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - dev-deps-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  dev-deps-postgres:
+  dev-deps-redis:
